@@ -14,10 +14,13 @@ class Reg_f32b(Reg_num):
     count = 2
     rtype = float
     offset = None
+    invert = False  # <== Add this line
 
     def set_raw_value(self, val):
         if self.offset is not None:
             val += self.offset
+        if self.invert:
+            val = -val
         return self.update(type(self.scale)(val / self.scale))
 
 nr_phases = [ 0, 1, 3, 3 ]
@@ -329,7 +332,94 @@ class Eastron_SDM630MCT(Eastron_3phase):
     productname = 'SDM630-MCT'
     min_timeout = 0.5
 
+class Eastron_SDM630MCT40(Eastron_3phase):  # Common meter installed with a GroWatt system.
+    productid = 0xb023
+    productname = 'SDM630-MCT40'
+    min_timeout = 0.5
 
+    def device_init(self):
+        self.role = 'pvinverter'
+        super(Eastron_3phase, self).device_init()
+
+        self.info_regs = [
+            Reg_u32b(0xfc00, '/Serial'),
+            Reg_u16(0xfc02, '/HardwareVersion'),
+            Reg_u16(0xfc03, '/FirmwareVersion'),
+            Reg_f32b(0x000a, '/PhaseConfig', text=phase_configs, write=(0, 3)),
+        ]
+        self.read_info()
+        phases = nr_phases[int(self.info['/PhaseConfig'])]
+
+        self.data_regs = [
+            Reg_f32b(0x0034, '/Ac/Power', 1, _w, onchange=self.power_balance),
+            Reg_f32b(0x0030, '/Ac/Current', 1, _a),
+            Reg_f32b(0x0046, '/Ac/Frequency', 1, _hz),
+            Reg_f32b(0x0048, '/Ac/Energy/ForwardSum', 1, _kwh, onchange=self.deviceEnergyForward_changed),
+            Reg_f32b(0x004a, '/Ac/Energy/ReverseSum', 1, _kwh, onchange=self.deviceEnergyReverse_changed),
+        ]
+
+        # Invert total power reading
+        self.data_regs[0].invert = True  # /Ac/Power
+
+        for n in range(1, phases + 1):
+            self.data_regs += self.phase_regs(n)
+
+        self.nr_phases = phases
+        self.last_time = time.time()
+        self.energy_time = time.time() - 4
+        self.balancing_time = time.time()
+        self.last_power = 0
+
+    def update_energy(self):
+        now = time.time()
+
+        # Skip if /Ac/Power not valid
+        if self.dbus['/Ac/Power'] is None:
+            return
+
+        # Signed power value (can be +ve or -ve)
+        power = float(self.dbus['/Ac/Power'])
+
+        # Calculate time since last update
+        if self.last_time:
+            deltaT = now - self.last_time
+            delta_kWh = (power * deltaT) / 3600000  # W to kWh
+
+            if delta_kWh >= 0:
+                # Exporting — power flowing **out** of inverter
+                self.dbus['/Ac/Energy/ReverseBalancing'] += delta_kWh
+            else:
+                # Importing — inverter is being powered (not usual for PV, but logical for net meters)
+                self.dbus['/Ac/Energy/ForwardBalancing'] += abs(delta_kWh)
+
+            # Assign visible energy counters
+            self.dbus['/Ac/Energy/Forward'] = self.dbus['/Ac/Energy/ForwardBalancing']
+            self.dbus['/Ac/Energy/Reverse'] = self.dbus['/Ac/Energy/ReverseBalancing']
+
+        self.last_time = now
+
+        # Persist values every 5 minutes
+        if now - self.balancing_time >= 300:
+            self.forwardBalancing_item.set_value(self.dbus['/Ac/Energy/ForwardBalancing'])
+            self.reverseBalancing_item.set_value(self.dbus['/Ac/Energy/ReverseBalancing'])
+            self.balancing_time = now
+    def phase_regs(self, n):
+        s = 2 * (n - 1)
+
+        regs = [
+            Reg_f32b(0x0000 + s, '/Ac/L%d/Voltage' % n,        1, _v),
+            Reg_f32b(0x0006 + s, '/Ac/L%d/Current' % n,        1, _a),
+            Reg_f32b(0x000c + s, '/Ac/L%d/Power' % n,          1, _w),
+            Reg_f32b(0x001e + s, '/Ac/L%d/PowerFactor' % n,    1, None),
+            Reg_f32b(0x015a + s, '/Ac/L%d/Energy/Forward' % n, 1, _kwh),
+            Reg_f32b(0x0160 + s, '/Ac/L%d/Energy/Reverse' % n, 1, _kwh),
+        ]
+
+        # Invert power registers only
+        regs[2].invert = True  # /Ac/Lx/Power
+
+        return regs
+            
 models = {
     132: {
         'model':    'SDM72DM',
@@ -357,7 +447,7 @@ models = {
     },
     136: {
         'model':    'SDM630MCT-40ma',
-        'handler':  Eastron_SDM630MCT,
+        'handler':  Eastron_SDM630MCT40,
     },
 }
 
