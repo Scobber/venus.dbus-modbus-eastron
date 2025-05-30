@@ -4,17 +4,18 @@ import time
 import device
 import probe
 from register import *
-import time
 from settingsdevice import SettingsDevice
 
 log = logging.getLogger()
+
+MAXREFRESHRATE = 10
 
 class Reg_f32b(Reg_num):
     coding = ('>f', '>2H')
     count = 2
     rtype = float
     offset = None
-    invert = False  # <== Add this line
+    invert = False
 
     def set_raw_value(self, val):
         if self.offset is not None:
@@ -23,14 +24,8 @@ class Reg_f32b(Reg_num):
             val = -val
         return self.update(type(self.scale)(val / self.scale))
 
-nr_phases = [ 0, 1, 3, 3 ]
-
-phase_configs = [
-    'undefined',
-    '1p2w',
-    '3p3w',
-    '3p4w',
-]
+nr_phases = [0, 1, 3, 3]
+phase_configs = ['undefined', '1p2w', '3p3w', '3p4w']
 
 _kwh = lambda v: (str(round(v, 3)) + ' kWh')
 _kwh2 = lambda p, v: (str(round(v, 3)) + ' kWh')
@@ -39,7 +34,28 @@ _w = lambda v: (str(round(v, 1)) + 'W')
 _v = lambda v: (str(round(v, 1)) + 'V')
 _hz = lambda v: (str(round(v, 1)) + 'Hz')
 
-MAXREFRESHRATE = 10
+class EastronService:
+    def __init__(self, role):
+        self.role = role
+        service_base = self._get_service_base(role)
+        self._dbusservice = VeDbusService(service_base + ".eastron_1")
+        self._dbusservice.add_path('/DeviceInstance', 40)
+        self._dbusservice.add_path('/ProductId', 0xA042)
+
+    def _get_service_base(self, role):
+        mapping = {
+            "grid": "com.victronenergy.grid",
+            "pvinverter": "com.victronenergy.pvinverter",
+            "genset": "com.victronenergy.genset",
+            "acload": "com.victronenergy.acload"
+        }
+        return mapping.get(role.lower(), "com.victronenergy.grid")
+
+    def _update(self):
+        try:
+            pass  # insert modbus poll logic here
+        except IOError as e:
+            log.warning(f"Modbus read failed: {e}")
 
 class ModbusDeviceEastron():
     vendor_name = 'Eastron'

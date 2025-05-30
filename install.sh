@@ -1,72 +1,82 @@
 #!/bin/bash
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-MODBUS_CLIEN_DIR=/opt/victronenergy/dbus-modbus-client
-GUI_DIR=/opt/victronenergy/gui/qml
 
-# set permissions for script files
-chmod a+x $SCRIPT_DIR/restart.sh
-chmod 744 $SCRIPT_DIR/restart.sh
+set -e
 
-chmod a+x $SCRIPT_DIR/installGuiV2.sh
-chmod 744 $SCRIPT_DIR/installGuiV2.sh
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+MODBUS_CLIENT_DIR="/opt/victronenergy/dbus-modbus-client"
+GUI_DIR="/opt/victronenergy/gui/qml"
+RC_LOCAL="/data/rc.local"
 
-chmod a+x $SCRIPT_DIR/uninstall.sh
-chmod 744 $SCRIPT_DIR/uninstall.sh
+echo "📁 Ensuring helper scripts are executable..."
+for s in restart.sh installGuiV2.sh uninstall.sh; do
+    chmod a+x "$SCRIPT_DIR/$s"
+    chmod 744 "$SCRIPT_DIR/$s"
+done
 
-# add install-script to rc.local to be ready for firmware update
-filename=/data/rc.local
-if [ ! -f $filename ]
-then
-    touch $filename
-    chmod 755 $filename
-    echo "#!/bin/bash" >> $filename
-    echo >> $filename
-fi
-grep -qxF "$SCRIPT_DIR/install.sh" $filename || echo "$SCRIPT_DIR/install.sh" >> $filename
-
-# Backup GUI
-if ! [ -e $GUI_DIR/PageAcInSetup._qml ]
-then
-    cp $GUI_DIR/PageAcInSetup.qml $GUI_DIR/PageAcInSetup._qml 
+# --- Persist install script across firmware updates ---
+if [ ! -f "$RC_LOCAL" ]; then
+    echo "📄 Creating rc.local..."
+    echo -e "#!/bin/bash\n" > "$RC_LOCAL"
+    chmod 755 "$RC_LOCAL"
 fi
 
-# Patch GUI
-patch=$SCRIPT_DIR/PageAcInSetup_patch.qml
-file=$GUI_DIR/PageAcInSetup.qml
-if [ "$(cat $patch)" != "$(sed -n '/\/\* Eastron settings \*\//,/\/\* Eastron settings end \*\//p' $file )" ]; then
-    sed -i '/\/\* Eastron settings \*\//,/\/\* Eastron settings end \*\//d'  $file
-    line_number=$(grep -n "\/\* EM24 settings \*\/" $file | cut -d ":" -f 1)
-    if ! [ -z "$line_number" ]; then
-      line_number=$((line_number - 1))r
-      echo "patching file $file"
-      sed -i "$line_number $patch" $file
-      svc -t /service/gui
+if ! grep -qxF "$SCRIPT_DIR/install.sh" "$RC_LOCAL"; then
+    echo "📌 Adding install.sh to rc.local for persistence..."
+    echo "$SCRIPT_DIR/install.sh" >> "$RC_LOCAL"
+fi
+
+# --- Patch GUI V2 ---
+PATCH="$SCRIPT_DIR/PageAcInSetup_patch.qml"
+GUI_FILE="$GUI_DIR/PageAcInSetup.qml"
+BACKUP="$GUI_DIR/PageAcInSetup._qml"
+
+if [ ! -f "$BACKUP" ]; then
+    echo "📦 Backing up GUI file..."
+    cp "$GUI_FILE" "$BACKUP"
+fi
+
+EXISTING_BLOCK="$(sed -n '/\\/\\* Eastron settings \\*\\//,/\\/\\* Eastron settings end \\*\\//p' "$GUI_FILE")"
+NEW_BLOCK="$(cat "$PATCH")"
+
+if [ "$EXISTING_BLOCK" != "$NEW_BLOCK" ]; then
+    echo "🎨 Updating GUI with Eastron patch..."
+    sed -i '/\\/\\* Eastron settings \\*\\//,/\\/\\* Eastron settings end \\*\\//d' "$GUI_FILE"
+
+    EM24_LINE=$(grep -n "/\\* EM24 settings \\*/" "$GUI_FILE" | cut -d ':' -f1)
+    if [ -n "$EM24_LINE" ]; then
+        INSERT_LINE=$((EM24_LINE - 1))
+        sed -i "${INSERT_LINE}r $PATCH" "$GUI_FILE"
+        echo "🔄 Restarting GUI service..."
+        svc -t /service/gui
     else
-      echo "Error patching file $file" 
+        echo "❌ Could not locate insertion point: '/\\* EM24 settings \\*/' not found in $GUI_FILE"
     fi
+else
+    echo "✅ GUI patch already present. Skipping."
 fi
 
-# Backup modbus-client
-if ! [ -e $MODBUS_CLIEN_DIR/dbus-modbus-client._py ]
-then
-    cp $MODBUS_CLIEN_DIR/dbus-modbus-client.py $MODBUS_CLIEN_DIR/dbus-modbus-client._py 
+# --- Patch dbus-modbus-client ---
+MODBUS_FILE="$MODBUS_CLIENT_DIR/dbus-modbus-client.py"
+MODBUS_BACKUP="$MODBUS_CLIENT_DIR/dbus-modbus-client._py"
+
+if [ ! -f "$MODBUS_BACKUP" ]; then
+    echo "📦 Backing up Modbus client..."
+    cp "$MODBUS_FILE" "$MODBUS_BACKUP"
 fi
 
-# Patch modbus-client
-ln -s -f $SCRIPT_DIR/Eastron.py $MODBUS_CLIEN_DIR/Eastron.py
-file=$MODBUS_CLIEN_DIR/dbus-modbus-client.py
-if ! grep -q "import Eastron" $file; then
-  line_number=$(grep -n "import carlo_gavazzi" $file | cut -d ":" -f 1)
-  if ! [ -z "$line_number" ]; then
-      echo "patching file $file"
-      sed -i "$line_number i import Eastron" $file
-      $SCRIPT_DIR/restart.sh
+# Symlink our Eastron module into modbus client folder
+ln -sf "$SCRIPT_DIR/Eastron.py" "$MODBUS_CLIENT_DIR/Eastron.py"
+echo "🔗 Linked Eastron.py into $MODBUS_CLIENT_DIR"
+
+if ! grep -q "import Eastron" "$MODBUS_FILE"; then
+    echo "🧩 Patching dbus-modbus-client to import Eastron..."
+    IMPORT_LINE=$(grep -n "import carlo_gavazzi" "$MODBUS_FILE" | cut -d ':' -f1)
+    if [ -n "$IMPORT_LINE" ]; then
+        sed -i "${IMPORT_LINE}i import Eastron" "$MODBUS_FILE"
+        "$SCRIPT_DIR/restart.sh"
     else
-      echo "Error patching file $file" 
+        echo "❌ Failed to patch: 'import carlo_gavazzi' not found."
     fi
+else
+    echo "✅ Modbus client already patched with Eastron. Skipping."
 fi
-
-
-
-
-
