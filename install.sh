@@ -26,22 +26,53 @@ if ! grep -qxF "$SCRIPT_DIR/install.sh" "$RC_LOCAL"; then
 fi
 
 # --- Patch GUI V2 ---
+GUI_FILE="$(find / -path '*/gui/qml/PageAcInSetup.qml' 2>/dev/null | head -n 1)"
 PATCH="$SCRIPT_DIR/PageAcInSetup_patch.qml"
-GUI_FILE="$GUI_DIR/PageAcInSetup.qml"
-BACKUP="$GUI_DIR/PageAcInSetup._qml"
+BACKUP="${GUI_FILE%/*}/PageAcInSetup._qml"
+
+if [ -z "$GUI_FILE" ]; then
+    echo "⚠️ GUI QML file not found — skipping patch (headless system?)"
+else
+    echo "🎨 Found: $GUI_FILE"
+
+    if [ ! -f "$BACKUP" ]; then
+        echo "📦 Backing up original GUI file..."
+        cp "$GUI_FILE" "$BACKUP"
+    fi
+
+    EXISTING_BLOCK="$(sed -n '/* Eastron settings */,/* Eastron settings end */p' "$GUI_FILE")"
+    NEW_BLOCK="$(cat "$PATCH")"
+
+    if [ "$EXISTING_BLOCK" != "$NEW_BLOCK" ]; then
+        echo "🎨 Updating GUI with Eastron patch..."
+        sed -i '/* Eastron settings */,/* Eastron settings end */d' "$GUI_FILE"
+
+        EM24_LINE=$(grep -n "/* EM24 settings */" "$GUI_FILE" | cut -d ':' -f1)
+        if [ -n "$EM24_LINE" ]; then
+            INSERT_LINE=$((EM24_LINE - 1))
+            sed -i "${INSERT_LINE}r $PATCH" "$GUI_FILE"
+            echo "🔄 Attempting to restart GUI..."
+            [ -d /service/gui ] && svc -t /service/gui || echo "⚠️ GUI service not found"
+        else
+            echo "❌ Insertion point not found — patch not applied"
+        fi
+    else
+        echo "✅ GUI patch already present. Skipping."
+    fi
+fi
 
 if [ ! -f "$BACKUP" ]; then
     echo "📦 Backing up GUI file..."
     cp "$GUI_FILE" "$BACKUP"
 fi
 
-EXISTING_BLOCK="$(sed -n '/\\/\\* Eastron settings \\*\\//,/\\/\\* Eastron settings end \\*\\//p' "$GUI_FILE")"
+EXISTING_BLOCK="$(sed -n '/* Eastron settings */,/* Eastron settings end */p' "$GUI_FILE")"
 NEW_BLOCK="$(cat "$PATCH")"
 
 if [ "$EXISTING_BLOCK" != "$NEW_BLOCK" ]; then
     echo "🎨 Updating GUI with Eastron patch..."
-    sed -i '/\\/\\* Eastron settings \\*\\//,/\\/\\* Eastron settings end \\*\\//d' "$GUI_FILE"
-
+    sed -i '/* Eastron settings */,/* Eastron settings end */d' "$GUI_FILE"
+    
     EM24_LINE=$(grep -n "/\\* EM24 settings \\*/" "$GUI_FILE" | cut -d ':' -f1)
     if [ -n "$EM24_LINE" ]; then
         INSERT_LINE=$((EM24_LINE - 1))

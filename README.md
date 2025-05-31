@@ -5,6 +5,16 @@ Integrate Eastron grid meters into Victron Energies Venus OS
 With the scripts in this repo it should be easy possible to install, uninstall, restart a service that connects Eastron grid meters to the VenusOS and GX devices from Victron. 
 
 ## Installation
+### For this version:
+```
+wget https://github.com/Scobber/venus.dbus-modbus-eastron/archive/refs/heads/compat.zip
+unzip compat.zip "venus.dbus-modbus-eastron-compat/*" -d /data
+mv /data/venus.dbus-modbus-eastron-compat /data/dbus-modbus-eastron
+chmod a+x /data/dbus-modbus-eastron/install.sh
+/data/dbus-modbus-eastron/install.sh
+rm compat.zip
+```
+
 ### Get the code
 Just grab a copy of the main branch and copy them to a folder under `/data/` e.g. `/dbus-modbus-eastron`.
 After that call the install.sh script.

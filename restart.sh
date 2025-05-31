@@ -2,21 +2,31 @@
 
 set -e
 
-# Remove bytecode cache
+# Remove compiled bytecode
 PYC_FILE="/opt/victronenergy/dbus-modbus-client/__pycache__/Eastron.cpython-38.pyc"
-
 if [ -f "$PYC_FILE" ]; then
     echo "🧹 Removing cached bytecode: $PYC_FILE"
     rm -f "$PYC_FILE"
 fi
 
-# Gracefully stop the dbus-modbus-client via svc
-SERVICE_NAME="dbus-modbus-client"
+# Restart logic for dbus-modbus-client or fallback
+SERVICE_DIR="/service/dbus-modbus-client"
+FALLBACK_NAME="dbus-modbus-client.py"
 
-if svc -s "$SERVICE_NAME" 2>/dev/null; then
-    echo "🛑 Stopping $SERVICE_NAME via svc..."
-    svc -k "$SERVICE_NAME"
+if [ -d "$SERVICE_DIR" ]; then
+    echo "🔁 Restarting dbus-modbus-client via svc..."
+    svc -d "$SERVICE_DIR"
+    sleep 2
+    svc -u "$SERVICE_DIR"
+elif [ -d /service/serial-starter ]; then
+    echo "🔁 Restarting serial-starter instead..."
+    svc -d /service/serial-starter
+    sleep 2
+    svc -u /service/serial-starter
 else
-    echo "⚠️ svc not available or service name not found — falling back to manual kill"
-    pkill -f "dbus-modbus-client.py" || echo "No matching process found"
+    echo "⚠️ svc not found for dbus-modbus-client or serial-starter — using pkill fallback"
+    pkill -f "$FALLBACK_NAME" || echo "No running process found"
+    sleep 2
 fi
+
+echo "✅ Restart complete."
